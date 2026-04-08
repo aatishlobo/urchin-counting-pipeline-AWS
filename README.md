@@ -1,4 +1,4 @@
-# 🌊 Kelp Forest Monitoring Pipeline (AWS-Based Video Processing System)
+# Kelp Forest Monitoring Pipeline (AWS-Based Video Processing System)
 
 ## Overview
 
@@ -8,7 +8,7 @@ The pipeline is built on Amazon Web Services (AWS) and is designed to handle GB-
 
 ---
 
-## 🎯 Key Features
+## Key Features
 
 - Event-driven ingestion from S3 uploads  
 - Distributed processing using SQS + EC2 (GPU-enabled)  
@@ -19,7 +19,7 @@ The pipeline is built on Amazon Web Services (AWS) and is designed to handle GB-
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 [ Upload Client ]
@@ -43,7 +43,7 @@ The pipeline is built on Amazon Web Services (AWS) and is designed to handle GB-
 
 ---
 
-## 🔁 End-to-End Flow
+## End-to-End Flow
 
 ### 1. Ingestion
 - Upload `.mp4` video to S3
@@ -78,7 +78,7 @@ csvs/master.csv
 
 ---
 
-## ⚙️ Components
+## Components
 
 - S3 – storage
 - SQS – queue
@@ -88,7 +88,7 @@ csvs/master.csv
 
 ---
 
-## 📊 Outputs
+## Outputs
 
 - Annotated videos
 - Detection + tracking JSON
@@ -97,14 +97,14 @@ csvs/master.csv
 
 ---
 
-## ⚡ Performance
+## Performance
 
 - ~2.5h → parallel GPU pipeline
 - Scales across multiple uploads
 
 ---
 
-## 🚀 Commands
+## Commands
 
 ```
 sudo systemctl restart sqs-worker.service
@@ -113,6 +113,6 @@ sudo journalctl -u sqs-worker.service -f
 
 ---
 
-## 🧾 Summary
+## Summary
 
 A scalable, fault-tolerant pipeline converting raw underwater video into structured ecological data automatically.
