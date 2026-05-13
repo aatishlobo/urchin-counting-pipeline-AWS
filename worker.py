@@ -131,6 +131,47 @@ def upload_directory_to_s3(local_dir: Path, bucket: str, s3_prefix: str) -> None
         upload_file_to_s3(p, bucket, key)
 
 
+def get_survey_s3_key(video_name: str, file_suffix: str, run_tag: str) -> str:
+    import re
+    from datetime import datetime
+
+    stem = Path(video_name).stem
+
+    # Strip Box file ID prefix (e.g. "2213719952827-")
+    stem = re.sub(r'^\d{10,}-', '', stem)
+
+    # Format run_tag to readable directory: 20260505T184207Z → 2026-05-05_18h42
+    try:
+        dt = datetime.strptime(run_tag, "%Y%m%dT%H%M%SZ")
+        readable_dir = dt.strftime("%Y-%m-%d_%Hh%M")
+    except ValueError:
+        readable_dir = run_tag
+
+    # stem is the video title subdirectory, file_suffix is the filename
+    return f"surveys/{readable_dir}/{stem}/{file_suffix}"
+
+
+def patch_summary_with_s3_urls(summary_jsonl: Path, video_s3_urls: dict) -> None:
+    """Add S3 URL fields to each row in summary.jsonl after uploads complete."""
+    if not summary_jsonl.exists():
+        return
+    updated = []
+    with open(summary_jsonl, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            filename = row.get("video_filename", "")
+            if filename in video_s3_urls:
+                row["annotated_video_url"] = video_s3_urls[filename]["annotated_video_url"]
+                row["outputs_folder_url"] = video_s3_urls[filename]["outputs_folder_url"]
+            updated.append(row)
+    with open(summary_jsonl, "w", encoding="utf-8") as f:
+        for row in updated:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 # =========================
 # Stopper helpers
 # =========================
@@ -318,15 +359,22 @@ def jsonl_to_csv(jsonl_path: Path, csv_path: Path) -> None:
 
     fieldnames = [
         "video_filename",
-        "video_path",
         "urchin_count",
         "duration_sec",
         "fps",
         "frame_count",
         "date_processed",
         "model_version",
-        "detection_json",
-        "pathway_json",
+        "survey_date",
+        "boat",
+        "site",
+        "survey_type",
+        "block",
+        "heading_deg",
+        "transect_length_m",
+        "naming_convention_matched",
+        "annotated_video_url",    # new
+        "outputs_folder_url",     # new
         "params",
     ]
 
@@ -337,15 +385,22 @@ def jsonl_to_csv(jsonl_path: Path, csv_path: Path) -> None:
         for r in rows:
             writer.writerow({
                 "video_filename": r.get("video_filename"),
-                "video_path": r.get("video_path"),
                 "urchin_count": r.get("urchin_count"),
                 "duration_sec": r.get("duration_sec"),
                 "fps": r.get("fps"),
                 "frame_count": r.get("frame_count"),
                 "date_processed": r.get("date_processed"),
                 "model_version": r.get("model_version"),
-                "detection_json": r.get("detection_json"),
-                "pathway_json": r.get("pathway_json"),
+                "survey_date": r.get("survey_date"),
+                "boat": r.get("boat"),
+                "site": r.get("site"),
+                "survey_type": r.get("survey_type"),
+                "block": r.get("block"),
+                "heading_deg": r.get("heading_deg"),
+                "transect_length_m": r.get("transect_length_m"),
+                "naming_convention_matched": r.get("naming_convention_matched"),
+                "annotated_video_url": r.get("annotated_video_url"),
+                "outputs_folder_url": r.get("outputs_folder_url"),
                 "params": json.dumps(r.get("params"), ensure_ascii=False),
             })
 
@@ -374,7 +429,7 @@ def run_annotation(video_path: Path, pathway_json: Path, output_dir: Path) -> Pa
         return None
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_video = output_dir / f"{video_path.stem}.annotated.mp4"
+    out_video = output_dir / f"{video_path.stem}_annotated.mp4"
 
     cmd = build_annotation_command(video_path, pathway_json, out_video)
     log.info("Running annotation: %s", " ".join(cmd))
@@ -527,7 +582,7 @@ def run_simple_batch_on_videos(downloaded_files: list[Path]) -> None:
                     )
 
                     if out_video:
-                        s3_key = f"{_prefix(ANNOTATION_S3_PREFIX)}{run_out_dir.name}/{out_video.name}"
+                        s3_key = get_survey_s3_key(video_path.name, "annotated.mp4", run_tag)
                         upload_file_to_s3(out_video, OUTPUT_S3_BUCKET, s3_key)
                         log.info("Uploaded annotated video to s3://%s/%s", OUTPUT_S3_BUCKET, s3_key)
 
@@ -539,10 +594,48 @@ def run_simple_batch_on_videos(downloaded_files: list[Path]) -> None:
                     log.error("Annotated video generation/upload failed", exc_info=True)
 
         if UPLOAD_BATCH_OUTPUTS_TO_S3:
-            set_processing_state(True, {"stage": "uploading_run_directory"})
-            s3_prefix = f"{_prefix(BATCH_S3_PREFIX)}{run_out_dir.name}/"
-            log.info("Uploading batch outputs to s3://%s/%s", OUTPUT_S3_BUCKET, s3_prefix)
-            upload_directory_to_s3(run_out_dir, OUTPUT_S3_BUCKET, s3_prefix)
+            set_processing_state(True, {"stage": "uploading_detection_pathway"})
+            for vp in downloaded_files:
+                vid_out = run_out_dir / vp.stem
+                det_json = vid_out / "detection.json"
+                path_json = vid_out / "pathway.json"
+
+                if det_json.exists():
+                    s3_key = get_survey_s3_key(vp.name, "detection.json", run_tag)
+                    upload_file_to_s3(det_json, OUTPUT_S3_BUCKET, s3_key)
+                    log.info("Uploaded detection.json to s3://%s/%s", OUTPUT_S3_BUCKET, s3_key)
+
+                if path_json.exists():
+                    s3_key = get_survey_s3_key(vp.name, "pathway.json", run_tag)
+                    upload_file_to_s3(path_json, OUTPUT_S3_BUCKET, s3_key)
+                    log.info("Uploaded pathway.json to s3://%s/%s", OUTPUT_S3_BUCKET, s3_key)
+
+        # Build S3 URL map now that all uploads are complete
+        video_s3_urls = {}
+        for vp in downloaded_files:
+            annotated_key = get_survey_s3_key(vp.name, "annotated.mp4", run_tag)
+            folder_key = "/".join(annotated_key.split("/")[:-1]) + "/"
+
+            base = "https://s3.console.aws.amazon.com/s3"
+            region = "us-west-2"
+            bucket = OUTPUT_S3_BUCKET
+
+            video_s3_urls[vp.name] = {
+                "annotated_video_url": (
+                    f"{base}/object/{bucket}?region={region}&prefix={annotated_key}"
+                ),
+                "outputs_folder_url": (
+                    f"{base}/buckets/{bucket}?region={region}&prefix={folder_key}"
+                ),
+            }
+
+        # Patch master.jsonl with S3 URLs and rebuild master.csv
+        patch_summary_with_s3_urls(MASTER_JSONL_LOCAL, video_s3_urls)
+        log.info("Patched master.jsonl with S3 URLs")
+
+        jsonl_to_csv(MASTER_JSONL_LOCAL, MASTER_CSV_LOCAL)
+        upload_file_to_s3(MASTER_CSV_LOCAL, OUTPUT_S3_BUCKET, MASTER_CSV_S3_KEY)
+        log.info("Re-uploaded master.csv with S3 URLs")
 
     finally:
         clear_processing_state()
